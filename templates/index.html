@@ -9,14 +9,17 @@
 <body data-phase="idle">
   <main>
     <header class="top">
-      <h1>Voice Quiz</h1>
+      <div class="brand">
+        <h1>Voice Quiz</h1>
+        <p class="tagline">Speak your answers. Learn out loud.</p>
+      </div>
       <div id="score" class="score" aria-live="polite">Score: 0 / 0</div>
     </header>
 
     <form id="setup" class="setup">
-      <label class="field">
+      <label class="field topic">
         <span>Topic</span>
-        <input id="topic" type="text" placeholder="e.g. Indian rivers" autocomplete="off" required>
+        <input id="topic" type="text" placeholder="What do you want to be quizzed on? e.g. Indian rivers" autocomplete="off" required>
       </label>
       <label class="field">
         <span>Language</span>
