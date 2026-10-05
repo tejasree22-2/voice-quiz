@@ -2,14 +2,63 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Voice Quiz</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
-<body>
+<body data-phase="idle">
   <main>
-    <h1>Voice Quiz</h1>
-    <p id="status">Ready.</p>
+    <header class="top">
+      <h1>Voice Quiz</h1>
+      <div id="score" class="score" aria-live="polite">Score: 0 / 0</div>
+    </header>
+
+    <form id="setup" class="setup">
+      <label class="field">
+        <span>Topic</span>
+        <input id="topic" type="text" placeholder="e.g. Indian rivers" autocomplete="off" required>
+      </label>
+      <label class="field">
+        <span>Language</span>
+        <select id="language">
+          <option value="en-IN">English</option>
+          <option value="te-IN">Telugu (తెలుగు)</option>
+          <option value="hi-IN">Hindi (हिन्दी)</option>
+        </select>
+      </label>
+      <button id="start" class="btn primary" type="submit">Start</button>
+    </form>
+
+    <section class="stage">
+      <p id="status" class="status" role="status" aria-live="polite">Pick a topic and press Start.</p>
+
+      <div id="questionCard" class="card" hidden>
+        <span class="tag">Question</span>
+        <p id="question" class="card-text"></p>
+      </div>
+
+      <button id="mic" class="mic" type="button" disabled aria-label="Record your answer">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M12 15a4 4 0 0 0 4-4V6a4 4 0 0 0-8 0v5a4 4 0 0 0 4 4Zm6-4a1 1 0 1 1 2 0 8 8 0 0 1-7 7.94V21h3a1 1 0 1 1 0 2H8a1 1 0 1 1 0-2h3v-2.06A8 8 0 0 1 4 11a1 1 0 1 1 2 0 6 6 0 0 0 12 0Z"/>
+        </svg>
+      </button>
+      <p class="hint">Tap to start, tap again to stop &mdash; or hold the button while you talk.</p>
+
+      <div id="transcriptCard" class="card" hidden>
+        <span class="tag">You said</span>
+        <p id="transcript" class="card-text"></p>
+      </div>
+
+      <div id="resultCard" class="card result" hidden>
+        <span id="resultLabel" class="tag"></span>
+        <p id="resultFeedback" class="card-text"></p>
+      </div>
+
+      <div id="errorBox" class="error" role="alert" hidden>
+        <p id="errorText"></p>
+        <button id="retry" class="btn" type="button" hidden>Try again</button>
+      </div>
+    </section>
   </main>
   <script src="{{ url_for('static', filename='app.js') }}"></script>
 </body>
