@@ -1,4 +1,5 @@
 import array
+import base64
 import json
 import math
 import os
@@ -7,7 +8,7 @@ import subprocess
 import anthropic
 import requests
 from dotenv import load_dotenv
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, Response, jsonify, render_template, request
 
 load_dotenv()
 
@@ -18,6 +19,12 @@ SARVAM_API_KEY = os.getenv("SARVAM_API_KEY")
 SARVAM_STT_URL = "https://api.sarvam.ai/speech-to-text"
 # Saarika is being retired; Sarvam's replacement is saaras:v3 in "transcribe" mode.
 SARVAM_STT_MODEL = os.getenv("SARVAM_STT_MODEL") or "saaras:v3"
+SARVAM_TTS_URL = "https://api.sarvam.ai/text-to-speech"
+SARVAM_TTS_MODEL = "bulbul:v3"
+TTS_MAX_CHARS = 2500  # bulbul:v3 limit
+TTS_CODEC, TTS_MIME = "mp3", "audio/mpeg"
+# One bulbul:v3 speaker per language; change the voice here.
+TTS_SPEAKERS = {"en-IN": "shubh", "te-IN": "kavya", "hi-IN": "priya"}
 MAX_AUDIO_SECONDS = 30  # Sarvam REST limit
 SILENCE_RMS = 100  # of 32768; below this the clip is treated as silence
 
@@ -262,6 +269,63 @@ def transcribe():
     if not text:
         return error("No speech was recognised in the audio", 422)
     return jsonify(text=text)
+
+
+@app.route("/speak", methods=["POST"])
+def speak():
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return error("Request body must be a JSON object", 400)
+
+    text = data.get("text")
+    language = data.get("language")
+
+    if not isinstance(text, str) or not text.strip():
+        return error("'text' must be a non-empty string", 400)
+    if len(text.strip()) > TTS_MAX_CHARS:
+        return error(f"'text' is longer than {TTS_MAX_CHARS} characters", 413)
+    if language not in TTS_SPEAKERS:
+        return error("'language' must be one of: " + ", ".join(TTS_SPEAKERS), 400)
+    if not SARVAM_API_KEY:
+        return error("SARVAM_API_KEY is not configured on the server", 500)
+
+    try:
+        resp = requests.post(
+            SARVAM_TTS_URL,
+            headers={"api-subscription-key": SARVAM_API_KEY},
+            json={
+                "text": text.strip(),
+                "language_code": language,
+                "model": SARVAM_TTS_MODEL,
+                "speaker": TTS_SPEAKERS[language],
+                "output_audio_codec": TTS_CODEC,
+            },
+            timeout=60,
+        )
+    except requests.Timeout:
+        return error("Sarvam text-to-speech timed out", 504)
+    except requests.RequestException:
+        return error("Could not reach Sarvam text-to-speech", 502)
+
+    if resp.status_code in (401, 403):
+        return error("Sarvam rejected the API key", 502)
+    if resp.status_code == 429:
+        return error("Sarvam rate limit reached, try again shortly", 429)
+    if resp.status_code != 200:
+        try:
+            detail = resp.json().get("error", {}).get("message") or resp.text
+        except ValueError:
+            detail = resp.text
+        return error(f"Sarvam error ({resp.status_code}): {detail[:200]}", 502)
+
+    try:
+        audio = base64.b64decode(resp.json()["audios"][0], validate=True)
+    except (ValueError, KeyError, IndexError, TypeError):
+        return error("Sarvam returned no usable audio", 502)
+    if not audio:
+        return error("Sarvam returned no usable audio", 502)
+
+    return Response(audio, mimetype=TTS_MIME)
 
 
 if __name__ == "__main__":
