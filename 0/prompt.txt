@@ -1,0 +1,9 @@
+Add a POST /transcribe route that accepts an audio file upload as multipart form data, plus a language code. Read the current Sarvam AI speech-to-text API documentation first, then send the audio to the Saarika model using the SARVAM_API_KEY header and return {"text": "..."}. Check which audio formats Sarvam accepts, because the browser will record WebM/Opus with MediaRecorder; if that format is not supported, convert it on the server. Handle empty or silent audio with a clear error. Test with a sample audio file and commit.
+
+---
+
+once again check with the curl
+
+---
+
+Add a POST /speak route that accepts JSON with text and language. Read the current Sarvam AI text-to-speech API documentation first, then call the Bulbul v3 model and return the audio to the browser with the correct Content-Type so it can be played directly. Sarvam returns base64-encoded audio, so decode it on the server. Pick one natural-sounding speaker per language and keep the choice in a config dictionary. Test by saving the output to a file and confirming it plays, then commit.
