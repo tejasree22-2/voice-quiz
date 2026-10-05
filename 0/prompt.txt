@@ -1,0 +1,14 @@
+<pasted_content id="eff9">
+Make two changes to the quiz.
+
+1. Stop repeated questions. Right now the list of asked questions lives only in memory, so the same topic gives the same questions after a restart or page reload. Persist the asked questions in localStorage, keyed by topic (lowercased and trimmed), language and level, and send that list with every /question call. Keep only the latest 50 per key. On the server, update the /question prompt so Claude treats a question as a repeat if it asks for the same fact in different words, and tell it to cover a different subtopic of the topic each time. After generating, compare the new question with the previous list using a normalised string match (lowercase, no punctuation), and retry up to two times if it matches. Add a "Reset history" button that clears the saved questions for the current topic.
+
+2. Add difficulty levels. Add a level dropdown next to the language dropdown with four options: Easy, Medium, High, Very High. Send level with the /question request and validate it on the server, returning 400 for an unknown value. Define each level in the prompt:
+- Easy: basic recall and definitions a beginner knows.
+- Medium: needs understanding of the concept, not just recall.
+- High: applies the concept, compares two things, or asks why.
+- Very High: expert level, covering edge cases or multi-step reasoning.
+At every level the question must still be answerable in one or two spoken sentences. Also send level to /check so the feedback matches the level, while still using simple sentences. Show the current level beside the score.
+
+Test /question with curl for each of the four levels on one topic, and call it five times in a row with the growing previous list to confirm there are no repeats. Then commit.
+</pasted_content id="eff9">
