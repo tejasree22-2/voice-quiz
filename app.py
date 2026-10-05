@@ -1,7 +1,11 @@
+import array
 import json
+import math
 import os
+import subprocess
 
 import anthropic
+import requests
 from dotenv import load_dotenv
 from flask import Flask, jsonify, render_template, request
 
@@ -10,6 +14,12 @@ load_dotenv()
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 ANTHROPIC_WORKSPACE_ID = os.getenv("ANTHROPIC_WORKSPACE_ID")
 SARVAM_API_KEY = os.getenv("SARVAM_API_KEY")
+
+SARVAM_STT_URL = "https://api.sarvam.ai/speech-to-text"
+# Saarika is being retired; Sarvam's replacement is saaras:v3 in "transcribe" mode.
+SARVAM_STT_MODEL = os.getenv("SARVAM_STT_MODEL") or "saaras:v3"
+MAX_AUDIO_SECONDS = 30  # Sarvam REST limit
+SILENCE_RMS = 100  # of 32768; below this the clip is treated as silence
 
 MODEL = "claude-haiku-4-5"
 LANGUAGES = {"en-IN": "English", "te-IN": "Telugu", "hi-IN": "Hindi"}
@@ -158,6 +168,100 @@ def check():
         return jsonify(correct=bool(result["correct"]), feedback=result["feedback"])
     except (StopIteration, ValueError, KeyError, TypeError):
         return error("Claude returned an unreadable evaluation", 502)
+
+
+def decode_audio(raw):
+    """Convert any ffmpeg-readable audio (e.g. browser WebM/Opus) to 16 kHz mono
+    16-bit PCM. Returns (samples, None) or (None, error message)."""
+    try:
+        proc = subprocess.run(
+            ["ffmpeg", "-v", "error", "-i", "pipe:0", "-ac", "1", "-ar", "16000",
+             "-f", "s16le", "pipe:1"],
+            input=raw, capture_output=True, timeout=30,
+        )
+    except FileNotFoundError:
+        return None, "ffmpeg is not installed on the server"
+    except subprocess.TimeoutExpired:
+        return None, "Audio conversion timed out"
+    if proc.returncode != 0 or not proc.stdout:
+        return None, "Could not read the audio file (unsupported or corrupt)"
+    samples = array.array("h")
+    samples.frombytes(proc.stdout[: len(proc.stdout) // 2 * 2])
+    return samples, None
+
+
+def to_wav(samples):
+    """Wrap 16 kHz mono PCM samples in a WAV container."""
+    data = samples.tobytes()
+    header = (
+        b"RIFF" + (36 + len(data)).to_bytes(4, "little") + b"WAVEfmt "
+        + (16).to_bytes(4, "little") + (1).to_bytes(2, "little")
+        + (1).to_bytes(2, "little") + (16000).to_bytes(4, "little")
+        + (32000).to_bytes(4, "little") + (2).to_bytes(2, "little")
+        + (16).to_bytes(2, "little") + b"data" + len(data).to_bytes(4, "little")
+    )
+    return header + data
+
+
+@app.route("/transcribe", methods=["POST"])
+def transcribe():
+    upload = request.files.get("audio") or request.files.get("file")
+    language = request.form.get("language")
+
+    if upload is None:
+        return error("Send the recording as multipart field 'audio'", 400)
+    if language not in LANGUAGES:
+        return error("'language' must be one of: " + ", ".join(LANGUAGES), 400)
+    if not SARVAM_API_KEY:
+        return error("SARVAM_API_KEY is not configured on the server", 500)
+
+    raw = upload.read()
+    if not raw:
+        return error("The audio file is empty", 400)
+
+    # Browsers record WebM/Opus. Sarvam lists WebM as supported, but MediaRecorder
+    # files have no duration header; normalising to WAV is more reliable and lets
+    # us reject silence and over-long clips before spending an API call.
+    samples, problem = decode_audio(raw)
+    if problem:
+        return error(problem, 500 if "ffmpeg" in problem else 400)
+    if len(samples) == 0:
+        return error("The audio contains no sound", 400)
+    if len(samples) / 16000 > MAX_AUDIO_SECONDS:
+        return error(f"Audio is longer than {MAX_AUDIO_SECONDS} seconds", 413)
+    rms = math.sqrt(sum(x * x for x in samples) / len(samples))
+    if rms < SILENCE_RMS:
+        return error("The audio is silent - nothing was heard, please try again", 422)
+
+    try:
+        resp = requests.post(
+            SARVAM_STT_URL,
+            headers={"api-subscription-key": SARVAM_API_KEY},
+            files={"file": ("audio.wav", to_wav(samples), "audio/wav")},
+            data={"model": SARVAM_STT_MODEL, "mode": "transcribe",
+                  "language_code": language},
+            timeout=60,
+        )
+    except requests.Timeout:
+        return error("Sarvam speech-to-text timed out", 504)
+    except requests.RequestException:
+        return error("Could not reach Sarvam speech-to-text", 502)
+
+    if resp.status_code in (401, 403):
+        return error("Sarvam rejected the API key", 502)
+    if resp.status_code == 429:
+        return error("Sarvam rate limit reached, try again shortly", 429)
+    if resp.status_code != 200:
+        try:
+            detail = resp.json().get("error", {}).get("message") or resp.text
+        except ValueError:
+            detail = resp.text
+        return error(f"Sarvam error ({resp.status_code}): {detail[:200]}", 502)
+
+    text = (resp.json().get("transcript") or "").strip()
+    if not text:
+        return error("No speech was recognised in the audio", 422)
+    return jsonify(text=text)
 
 
 if __name__ == "__main__":
