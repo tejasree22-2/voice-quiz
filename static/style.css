@@ -247,9 +247,21 @@ body[data-phase="ready"] .status { color: var(--accent); }
 
 @media (min-width: 560px) {
   .setup {
-    grid-template-columns: 1fr 12rem auto;
+    grid-template-columns: 1fr 10rem 9rem auto;
     align-items: end;
   }
 
   .setup.running { grid-template-columns: 1fr; }
+}
+
+.btn.link {
+  display: block;
+  margin: 0 auto 1rem;
+  padding: 0.3rem 0.8rem;
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--muted);
+  background: transparent;
+  border-color: transparent;
+  text-decoration: underline;
 }

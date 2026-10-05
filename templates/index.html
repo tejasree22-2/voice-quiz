@@ -26,6 +26,15 @@
           <option value="hi-IN">Hindi (हिन्दी)</option>
         </select>
       </label>
+      <label class="field">
+        <span>Level</span>
+        <select id="level">
+          <option value="easy">Easy</option>
+          <option value="medium">Medium</option>
+          <option value="high">High</option>
+          <option value="very_high">Very High</option>
+        </select>
+      </label>
       <button id="start" class="btn primary" type="submit">Start</button>
     </form>
 
@@ -43,6 +52,7 @@
         </svg>
       </button>
       <p class="hint">Tap to start, tap again to stop &mdash; or hold the button while you talk.</p>
+      <button id="resetHistory" class="btn link" type="button">Reset history</button>
 
       <div id="transcriptCard" class="card" hidden>
         <span class="tag">You said</span>

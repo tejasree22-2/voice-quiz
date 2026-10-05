@@ -4,6 +4,7 @@ import json
 import math
 import os
 import subprocess
+import unicodedata
 
 import anthropic
 import requests
@@ -30,6 +31,17 @@ SILENCE_RMS = 100  # of 32768; below this the clip is treated as silence
 
 MODEL = "claude-haiku-4-5"
 LANGUAGES = {"en-IN": "English", "te-IN": "Telugu", "hi-IN": "Hindi"}
+LEVELS = {
+    "easy": "Easy: basic recall and definitions that a beginner knows.",
+    "medium": "Medium: needs understanding of the concept, not just recall.",
+    "high": "High: applies the concept, compares two things, or asks why.",
+    "very_high": (
+        "Very High: expert level, covering edge cases or multi-step reasoning."
+    ),
+}
+LEVEL_NAMES = {"easy": "Easy", "medium": "Medium", "high": "High",
+               "very_high": "Very High"}
+MAX_REPEAT_RETRIES = 2
 
 app = Flask(__name__)
 claude = (
@@ -67,6 +79,16 @@ def call_claude(**kwargs):
         return None, error(f"Claude API error: {e.message}", 502)
 
 
+def normalise(text):
+    """Lowercase, drop punctuation/symbols and collapse whitespace."""
+    kept = "".join(
+        " " if ch.isspace() else ch
+        for ch in text.lower()
+        if unicodedata.category(ch)[0] not in "PS"
+    )
+    return " ".join(kept.split())
+
+
 @app.route("/")
 def index():
     return render_template("index.html")
@@ -85,37 +107,54 @@ def question():
 
     topic = data.get("topic")
     language = data.get("language")
+    level = data.get("level")
     previous = data.get("previous_questions", [])
 
     if not isinstance(topic, str) or not topic.strip():
         return error("'topic' must be a non-empty string", 400)
     if language not in LANGUAGES:
         return error("'language' must be one of: " + ", ".join(LANGUAGES), 400)
+    if level not in LEVELS:
+        return error("'level' must be one of: " + ", ".join(LEVELS), 400)
     if not isinstance(previous, list) or not all(isinstance(q, str) for q in previous):
         return error("'previous_questions' must be a list of strings", 400)
     if claude is None:
         return error("ANTHROPIC_API_KEY is not configured on the server", 500)
 
     asked = "\n".join(f"- {q}" for q in previous) or "(none)"
+    seen = {normalise(q) for q in previous}
     prompt = (
         f"Write one new short factual quiz question about: {topic.strip()}\n"
         f"Language: {LANGUAGES[language]} ({language}).\n"
-        "The question must be answerable in one spoken sentence, and must not "
-        "repeat or closely rephrase any of these previously asked questions:\n"
+        f"Difficulty level: {LEVELS[level]}\n"
+        "The question must be answerable in one or two spoken sentences at "
+        "every level: keep the question under 25 words, ask for one thing only, "
+        "and make sure it has a single clear, factually accurate answer.\n"
+        "Cover a different subtopic of the topic each time; pick one that the "
+        "previously asked questions below have not touched.\n"
+        "A question is a repeat if it asks for the same fact in different "
+        "words, so do not repeat or rephrase any of these previously asked "
+        "questions:\n"
         f"{asked}\n\n"
         "Reply with only the question text, nothing else."
     )
 
-    response, err = call_claude(
-        max_tokens=300, messages=[{"role": "user", "content": prompt}]
-    )
-    if err:
-        return err
-
-    text = next((b.text for b in response.content if b.type == "text"), "").strip()
-    if not text:
-        return error("Claude returned no question", 502)
-    return jsonify(question=text)
+    for _ in range(MAX_REPEAT_RETRIES + 1):
+        response, err = call_claude(
+            max_tokens=300, messages=[{"role": "user", "content": prompt}]
+        )
+        if err:
+            return err
+        text = next((b.text for b in response.content if b.type == "text"), "").strip()
+        if not text:
+            return error("Claude returned no question", 502)
+        if normalise(text) not in seen:
+            return jsonify(question=text)
+        prompt += (
+            f"\n\nYou just wrote \"{text}\", which was already asked. "
+            "Write a different question about a different subtopic."
+        )
+    return error("Could not generate a new question, please try again", 502)
 
 
 CHECK_SCHEMA = {
@@ -138,6 +177,7 @@ def check():
     q = data.get("question")
     answer = data.get("answer")
     language = data.get("language")
+    level = data.get("level")
 
     if not isinstance(q, str) or not q.strip():
         return error("'question' must be a non-empty string", 400)
@@ -145,12 +185,16 @@ def check():
         return error("'answer' must be a non-empty string", 400)
     if language not in LANGUAGES:
         return error("'language' must be one of: " + ", ".join(LANGUAGES), 400)
+    if level not in LEVELS:
+        return error("'level' must be one of: " + ", ".join(LEVELS), 400)
     if claude is None:
         return error("ANTHROPIC_API_KEY is not configured on the server", 500)
 
     lang = f"{LANGUAGES[language]} ({language})"
     prompt = (
-        "You are marking a spoken quiz answer for a beginner.\n"
+        "You are marking a spoken quiz answer.\n"
+        f"The question's difficulty level is {LEVEL_NAMES[level]} "
+        f"({LEVELS[level]}) Judge the answer against what that level expects.\n"
         f"Question: {q.strip()}\n"
         f"Answer (speech-to-text transcript): {answer.strip()}\n\n"
         "Judge by meaning, not exact wording. The transcript may contain small "
@@ -158,7 +202,8 @@ def check():
         "punctuation); forgive those if the intended answer is clear.\n"
         f"Write feedback in {lang}. If the answer is correct, give a short "
         "confirmation. If it is wrong, state the right answer in one or two "
-        "simple sentences a beginner can follow."
+        "simple sentences a beginner can follow. Whatever the level, keep the "
+        "feedback in short, simple sentences."
     )
 
     response, err = call_claude(

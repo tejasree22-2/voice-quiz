@@ -5,13 +5,16 @@
   const MIN_RECORD_MS = 400;    // shorter recordings are discarded
   const MAX_RECORD_MS = 25000;  // Sarvam's REST limit is 30 s
   const NEXT_DELAY_MS = 600;
+  const MAX_HISTORY = 50;       // asked questions remembered per topic/language/level
+  const HISTORY_PREFIX = "voiceQuiz.asked:";
+  const LEVEL_LABELS = { easy: "Easy", medium: "Medium", high: "High", very_high: "Very High" };
   // Tiny silent WAV, played inside the Start click to unlock audio on iOS/Safari.
   const SILENT_WAV =
     "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=";
 
   const $ = (id) => document.getElementById(id);
   const el = {
-    setup: $("setup"), topic: $("topic"), language: $("language"), start: $("start"),
+    setup: $("setup"), topic: $("topic"), language: $("language"), level: $("level"), resetHistory: $("resetHistory"), start: $("start"),
     status: $("status"), score: $("score"), mic: $("mic"),
     questionCard: $("questionCard"), question: $("question"),
     transcriptCard: $("transcriptCard"), transcript: $("transcript"),
@@ -23,8 +26,8 @@
   const state = {
     run: 0,              // bumped on every Start/Stop so stale async work can bail out
     phase: "idle",
-    topic: "", language: "en-IN",
-    asked: [],           // every question asked this session, sent with each /question call
+    topic: "", language: "en-IN", level: "easy",
+    asked: [],           // saved history for this topic/language/level, sent with each /question call
     current: null,       // question awaiting an answer
     correct: 0, answered: 0,
     stream: null, recorder: null, chunks: [], recStart: 0,
@@ -57,7 +60,27 @@
   }
 
   function updateScore() {
-    el.score.textContent = `Score: ${state.correct} / ${state.answered}`;
+    el.score.textContent =
+      `Score: ${state.correct} / ${state.answered} · ${LEVEL_LABELS[state.level]}`;
+  }
+
+  // ---------- asked-question history (localStorage) ----------
+  const historyKey = (topic, language, level) =>
+    HISTORY_PREFIX + JSON.stringify([topic.trim().toLowerCase(), language, level]);
+
+  function loadHistory(key) {
+    try {
+      const list = JSON.parse(localStorage.getItem(key));
+      return Array.isArray(list) ? list.filter((q) => typeof q === "string").slice(-MAX_HISTORY) : [];
+    } catch {
+      return [];
+    }
+  }
+
+  function saveHistory(key, list) {
+    try {
+      localStorage.setItem(key, JSON.stringify(list));
+    } catch { /* storage unavailable or full: history just won't persist */ }
   }
 
   function resetCards() {
@@ -65,7 +88,7 @@
   }
 
   function lockSetup(running) {
-    el.topic.disabled = el.language.disabled = running;
+    el.topic.disabled = el.language.disabled = el.level.disabled = running;
     el.setup.classList.toggle("running", running); // collapses the form to just the Stop button
     el.start.textContent = running ? "Stop" : "Start";
     el.start.classList.toggle("primary", !running);
@@ -210,6 +233,7 @@
       const res = await postJson("/question", {
         topic: state.topic,
         language: state.language,
+        level: state.level,
         previous_questions: state.asked,
       });
       ({ question } = await res.json());
@@ -221,7 +245,8 @@
     }
     if (run !== state.run) return;
 
-    state.asked.push(question);
+    state.asked = [...state.asked, question].slice(-MAX_HISTORY);
+    saveHistory(state.historyKey, state.asked);
     state.current = question;
     el.question.textContent = question;
     el.questionCard.hidden = false;
@@ -270,6 +295,7 @@
         question: state.current,
         answer,
         language: state.language,
+        level: state.level,
       });
       result = await res.json();
     } catch (err) {
@@ -325,8 +351,12 @@
     resetCards();
     state.run += 1;
     const run = state.run;
+    const language = el.language.value;
+    const level = el.level.value;
+    const key = historyKey(topic, language, level);
     Object.assign(state, {
-      topic, language: el.language.value, asked: [], current: null, correct: 0, answered: 0,
+      topic, language, level, historyKey: key, asked: loadHistory(key),
+      current: null, correct: 0, answered: 0,
     });
     updateScore();
 
@@ -358,6 +388,25 @@
     } else {
       endQuiz("Quiz stopped. Press Start for a new one.");
     }
+  });
+
+  el.level.addEventListener("change", () => {
+    state.level = el.level.value;
+    updateScore();
+  });
+
+  el.resetHistory.addEventListener("click", () => {
+    // Clears the saved questions for the topic currently typed (or running), in the chosen language/level.
+    const topic = el.topic.value.trim() || state.topic;
+    if (!topic) {
+      el.status.textContent = "Enter a topic first, then reset its history.";
+      return;
+    }
+    const key = historyKey(topic, el.language.disabled ? state.language : el.language.value,
+                           el.level.disabled ? state.level : el.level.value);
+    try { localStorage.removeItem(key); } catch { /* ignore */ }
+    if (key === state.historyKey) state.asked = [];
+    el.status.textContent = `History cleared for "${topic}".`;
   });
 
   el.retry.addEventListener("click", () => {
