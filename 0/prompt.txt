@@ -1,0 +1,1 @@
+change in the frontend the size of the input enter for the topic should be increase and total frontend need to visible good /design
