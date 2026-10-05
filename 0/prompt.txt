@@ -1,0 +1,5 @@
+Add a POST /transcribe route that accepts an audio file upload as multipart form data, plus a language code. Read the current Sarvam AI speech-to-text API documentation first, then send the audio to the Saarika model using the SARVAM_API_KEY header and return {"text": "..."}. Check which audio formats Sarvam accepts, because the browser will record WebM/Opus with MediaRecorder; if that format is not supported, convert it on the server. Handle empty or silent audio with a clear error. Test with a sample audio file and commit.
+
+---
+
+once again check with the curl
