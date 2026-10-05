@@ -1,3 +1,4 @@
+import json
 import os
 
 import anthropic
@@ -31,6 +32,22 @@ claude = (
 
 def error(message, status):
     return jsonify(error=message), status
+
+
+def call_claude(**kwargs):
+    """Call Haiku; returns (response, None) or (None, JSON error response)."""
+    try:
+        return claude.messages.create(model=MODEL, **kwargs), None
+    except anthropic.AuthenticationError:
+        return None, error("Invalid Anthropic API key", 502)
+    except anthropic.RateLimitError:
+        return None, error("Claude API rate limit reached, try again shortly", 429)
+    except anthropic.APITimeoutError:
+        return None, error("Claude API timed out", 504)
+    except anthropic.APIConnectionError:
+        return None, error("Could not reach the Claude API", 502)
+    except anthropic.APIStatusError as e:
+        return None, error(f"Claude API error: {e.message}", 502)
 
 
 @app.route("/")
@@ -72,27 +89,75 @@ def question():
         "Reply with only the question text, nothing else."
     )
 
-    try:
-        response = claude.messages.create(
-            model=MODEL,
-            max_tokens=300,
-            messages=[{"role": "user", "content": prompt}],
-        )
-    except anthropic.AuthenticationError:
-        return error("Invalid Anthropic API key", 502)
-    except anthropic.RateLimitError:
-        return error("Claude API rate limit reached, try again shortly", 429)
-    except anthropic.APITimeoutError:
-        return error("Claude API timed out", 504)
-    except anthropic.APIConnectionError:
-        return error("Could not reach the Claude API", 502)
-    except anthropic.APIStatusError as e:
-        return error(f"Claude API error: {e.message}", 502)
+    response, err = call_claude(
+        max_tokens=300, messages=[{"role": "user", "content": prompt}]
+    )
+    if err:
+        return err
 
     text = next((b.text for b in response.content if b.type == "text"), "").strip()
     if not text:
         return error("Claude returned no question", 502)
     return jsonify(question=text)
+
+
+CHECK_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "correct": {"type": "boolean"},
+        "feedback": {"type": "string"},
+    },
+    "required": ["correct", "feedback"],
+    "additionalProperties": False,
+}
+
+
+@app.route("/check", methods=["POST"])
+def check():
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return error("Request body must be a JSON object", 400)
+
+    q = data.get("question")
+    answer = data.get("answer")
+    language = data.get("language")
+
+    if not isinstance(q, str) or not q.strip():
+        return error("'question' must be a non-empty string", 400)
+    if not isinstance(answer, str) or not answer.strip():
+        return error("'answer' must be a non-empty string", 400)
+    if language not in LANGUAGES:
+        return error("'language' must be one of: " + ", ".join(LANGUAGES), 400)
+    if claude is None:
+        return error("ANTHROPIC_API_KEY is not configured on the server", 500)
+
+    lang = f"{LANGUAGES[language]} ({language})"
+    prompt = (
+        "You are marking a spoken quiz answer for a beginner.\n"
+        f"Question: {q.strip()}\n"
+        f"Answer (speech-to-text transcript): {answer.strip()}\n\n"
+        "Judge by meaning, not exact wording. The transcript may contain small "
+        "speech-to-text mistakes (misheard or misspelled words, missing "
+        "punctuation); forgive those if the intended answer is clear.\n"
+        f"Write feedback in {lang}. If the answer is correct, give a short "
+        "confirmation. If it is wrong, state the right answer in one or two "
+        "simple sentences a beginner can follow."
+    )
+
+    response, err = call_claude(
+        max_tokens=400,
+        messages=[{"role": "user", "content": prompt}],
+        output_config={"format": {"type": "json_schema", "schema": CHECK_SCHEMA}},
+    )
+    if err:
+        return err
+
+    try:
+        text = next(b.text for b in response.content if b.type == "text")
+        result = json.loads(text)
+        return jsonify(correct=bool(result["correct"]), feedback=result["feedback"])
+    except (StopIteration, ValueError, KeyError, TypeError):
+        return error("Claude returned an unreadable evaluation", 502)
 
 
 if __name__ == "__main__":
